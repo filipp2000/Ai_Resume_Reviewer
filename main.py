@@ -1,6 +1,3 @@
-import truststore
-truststore.inject_into_ssl()  # <-- use Windows certificates for Python SSL
-
 import streamlit as st
 import os
 from openai import OpenAI
