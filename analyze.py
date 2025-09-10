@@ -21,7 +21,6 @@ Return JSON with keys:
   * Imperative voice (“Add…”, “Refactor…”, “Quantify…”, “Reorder…”)
 
 - missing_skills (string[])
-  * 
   * MUST be the must-have skills for the **target role** (tools, frameworks, cloud, MLOps, data, soft skills)
   * Prefer concise phrases”
   * Avoid duplicates and generic items like “communication”
