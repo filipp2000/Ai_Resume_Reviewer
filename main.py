@@ -1,111 +1,184 @@
+# app.py
+# Purpose: Streamlit UI for AI-powered resume review
+# - Robust parsing (PDF/DOCX/TXT) via parser.extract_text_from_file
+# - Role-aware review via analyze_resume(...)
+# - Optional JD-aware ATS review via analyze_with_jd(...)
+# - Clean UI without emojis, proper bullet rendering, and a combined report download
+
 import truststore
-truststore.inject_into_ssl()  # <-- use Windows certificates for Python SSL
+truststore.inject_into_ssl()  # Use OS trust store (fixes corporate SSL intercept)
 
-import streamlit as st
 import os
-from openai import OpenAI
+import textwrap
+import streamlit as st
 from dotenv import load_dotenv
-from parser import extract_text_from_file 
-from analyze import analyze_resume   
 
-load_dotenv() # load OPENAI_API_KEY from .env file
-OPENAI_API_KEY=os.getenv("OPENAI_API_KEY")
+from parser import extract_text_from_file
+from analyze import analyze_resume, analyze_with_jd
 
-# Setup Streamlit UI
-# Streamlit will automatically handle rendering it correctly
-st.set_page_config(page_title="AI Resume Reviewer", page_icon="📃", layout="centered")
+
+# -------------------- Config & Secrets --------------------
+load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
+
+st.set_page_config(page_title="AI Resume Reviewer", page_icon="📄", layout="wide")
 st.title("AI Resume Reviewer")
-# Display string formatted as Markdown.
-st.markdown("Upload your resume and get AI-powered feedback tailored to your needs!")
 
-uploaded_file = st.file_uploader(
-    "Upload your resume (.pdf / .docx / .txt)",
-    type=["pdf", "docx", "txt"]
+st.caption(
+    "Note: Uploaded text is sent to the OpenAI API for analysis. "
+    "Avoid including sensitive personal data."
 )
 
-job_role = st.text_input("Enter the job role you're targeting (optional)")
 
-# Add analyze button
-analyze = st.button("Analyze Resume")
+# -------------------- Inputs --------------------
+uploaded_file = st.file_uploader(
+    "Upload your resume (.pdf / .docx / .txt)",
+    type=["pdf", "docx", "txt"],
+)
+colA, colB = st.columns([2, 2])
+
+with colA:
+    job_role = st.text_input("Target job role (optional)", placeholder="e.g., AI Engineer")
+
+with colB:
+    jd_file = st.file_uploader(
+        "Upload Job Description (.pdf / .docx / .txt) — optional",
+        type=["pdf", "docx", "txt"],
+        key="jd",
+    )
+
+analyze = st.button("Analyze")
 
 
-def cache_parsing(file) -> str:
-    """
-    Cache parsing results so Streamlit doesn't re-parse the same file on every rerun.
-    Note: we must reset the file pointer before reading.
-    """
+# -------------------- Helpers --------------------
+@st.cache_data(show_spinner=False)
+def parse_once(file) -> str:
+    """Cache parsing so we don't re-extract text on every rerun."""
     file.seek(0)
     return extract_text_from_file(file)
 
-# ---- Main flow ----
+
+def _render_bullets(title: str, items: list[str]) -> None:
+    """Render a section title followed by a clean bullet list."""
+    st.subheader(title)
+    if not items:
+        st.write("—")
+        return
+    for it in items:
+        st.markdown(f"- {it}")
+
+
+def _make_review_md(review: dict) -> str:
+    """Build Markdown for the generic/role-aware review."""
+    md = []
+    md.append(f"# Resume Review\n")
+    md.append(f"**Overall score:** {review.get('overall_score', 0)}\n")
+    md.append(f"## Executive Summary\n{review.get('executive_summary', '')}\n")
+    md.append("## Strengths")
+    md += [f"- {s}" for s in review.get("strengths", [])]
+    md.append("\n## Issues")
+    md += [f"- {s}" for s in review.get("issues", [])]
+    md.append("\n## Action Items")
+    md += [f"- {s}" for s in review.get("action_items", [])]
+    md.append("\n## Missing Skills (general/role-aware)")
+    md += [f"- {s}" for s in review.get("missing_skills", [])]
+    md.append("\n## Role-specific Tips")
+    md += [f"- {s}" for s in review.get("tailored_suggestions", [])]
+    return "\n".join(md).strip() + "\n"
+
+
+def _make_ats_md(ats: dict) -> str:
+    """Build Markdown for the JD-aware ATS section."""
+    md = []
+    md.append(f"# ATS Match (Job Description-aware)\n")
+    md.append(f"**Match score:** {ats.get('match_score', 0)}\n")
+    md.append("## Skills Matched")
+    md += [f"- {s}" for s in ats.get("skills_matched", [])]
+    md.append("\n## Skills Missing (from JD perspective)")
+    md += [f"- {s}" for s in ats.get("skills_missing", [])]
+    md.append("\n## Tailoring Suggestions for this JD")
+    md += [f"- {s}" for s in ats.get("suggestions_to_tailor", [])]
+    return "\n".join(md).strip() + "\n"
+
+
+# -------------------- Main Flow --------------------
 if analyze:
+    # Basic validations
+    if not OPENAI_API_KEY:
+        st.error("Missing OPENAI_API_KEY (set it in .env or .streamlit/secrets.toml).")
+        st.stop()
     if not uploaded_file:
         st.error("Please upload a resume file first.")
         st.stop()
 
+    # Parse resume
     try:
-        # 1) Parse file content (robust PDF/DOCX/TXT) with caching
-        file_content = cache_parsing(uploaded_file)
-        if not file_content.strip():
-            st.error("File appears to be empty.")
-            st.stop()
-
-        # 2) Call OpenAI to get structured JSON review (score, strengths, issues, etc.)
-        if not OPENAI_API_KEY:
-            st.error("Missing OPENAI_API_KEY (set in .env).")
-            st.stop()
-
-        with st.spinner("Analyzing resume..."):
-            data = analyze_resume(file_content, job_role, OPENAI_API_KEY)
-
-        # ---- Render results ----
-        st.success("Analysis completed")
-
-        # # Score block
-        st.subheader("Overall Score")
-        score = int(data.get("overall_score", 0))
-        st.metric("Score", score)
-        st.progress(score/100)
-
-        st.subheader("Summary")
-        st.write(data.get("summary", ""))
-
-        st.subheader("Strengths")
-        for s in data.get("strengths", []):
-            st.markdown(f"- {s}")
-
-        st.subheader("Issues")
-        for s in data.get("issues", []):
-            st.markdown(f"- {s}")
-
-        st.subheader("Action items")
-        for a in data.get("action_items", []):
-            st.markdown(f"- {a}")
-
-        st.subheader("Missing skills")
-        if data.get("missing_skills"):
-            for m in data.get("missing_skills", []):
-                st.markdown(f"- {m}")
-        else:
-            st.write("—")
-
-        st.subheader("Role-specific tips")
-        for tip in data.get("tailored_suggestions", []):
-            st.markdown(f"- {tip}")
-
-
-        # ---- Download report (Markdown) ----
-        report_md = (
-            f"# Resume Review\n\n**Score:** {data.get('overall_score', 0)}\n\n"
-            f"## Summary\n{data.get('summary', '')}\n\n"
-            "## Strengths\n" + "\n".join(f"- {s}" for s in data.get("strengths", [])) + "\n\n"
-            "## Issues\n" + "\n".join(f"- {s}" for s in data.get("issues", [])) + "\n\n"
-            "## Action Items\n" + "\n".join(f"- {s}" for s in data.get("action_items", [])) + "\n\n"
-            "## Missing Skills\n" + ", ".join(data.get("missing_skills", [])) + "\n\n"
-            "## Role-specific Tips\n" + "\n".join(f"- {s}" for s in data.get("tailored_suggestions", []))
-        )
-        st.download_button("Download report (.md)", report_md, file_name="resume_review.md")
-
+        resume_text = parse_once(uploaded_file)
     except Exception as e:
-        st.error(f"An error occured: {str(e)}", icon="🚨")
-        
+        st.error(f"Failed to parse resume: {e}")
+        st.stop()
+
+    if not resume_text.strip():
+        st.error("The resume file appears to be empty.")
+        st.stop()
+
+    # Optional JD parsing
+    jd_text = None
+    if jd_file:
+        try:
+            jd_text = parse_once(jd_file)
+        except Exception as e:
+            st.warning(f"Failed to parse Job Description: {e}")
+            jd_text = None
+        if jd_text and not jd_text.strip():
+            st.warning("The uploaded Job Description is empty. Proceeding with role-based review only.")
+            jd_text = None
+
+    # Optional preview expanders (for transparency/debugging)
+    with st.expander("Preview: parsed resume text (first 600 chars)"):
+        st.code(resume_text[:600] + ("..." if len(resume_text) > 600 else ""))
+
+    if jd_text:
+        with st.expander("Preview: parsed JD text (first 600 chars)"):
+            st.code(jd_text[:600] + ("..." if len(jd_text) > 600 else ""))
+
+    # -------- 1) Always run the generic/role-aware review --------
+    with st.spinner("Analyzing resume..."):
+        review = analyze_resume(resume_text, job_role, OPENAI_API_KEY)
+
+    st.header("Resume Review")
+    st.metric("Overall score", review.get("overall_score", 0))
+
+    st.subheader("Executive Summary")
+    st.write(review.get("executive_summary", review.get("summary", "")))
+
+    _render_bullets("Strengths", review.get("strengths", []))
+    _render_bullets("Issues", review.get("issues", []))
+    _render_bullets("Action Items", review.get("action_items", []))
+    _render_bullets("Missing Skills (general/role-aware)", review.get("missing_skills", []))
+    _render_bullets("Role-specific Tips", review.get("tailored_suggestions", []))
+
+    # -------- 2) If JD provided, also run the ATS JD-aware analysis --------
+    ats = None
+    if jd_text:
+        with st.spinner("Running ATS match against the Job Description..."):
+            ats = analyze_with_jd(resume_text, jd_text, job_role, OPENAI_API_KEY)
+
+        st.header("ATS Match (Job Description-aware)")
+        st.metric("Match score", ats.get("match_score", 0))
+        _render_bullets("Skills Matched (present in both Resume & JD)", ats.get("skills_matched", []))
+        _render_bullets("Skills Missing (required by JD but not in Resume)", ats.get("skills_missing", []))
+        _render_bullets("Tailoring Suggestions for this JD", ats.get("suggestions_to_tailor", []))
+
+    # -------- Combined report download (Review + optional ATS) --------
+    review_md = _make_review_md(review)
+    report_md = review_md
+    if ats:
+        report_md += "\n\n" + _make_ats_md(ats)
+
+    st.download_button(
+        "Download full report (.md)",
+        report_md,
+        file_name="resume_review_report.md",
+        type="primary",
+    )

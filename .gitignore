@@ -7,6 +7,7 @@ wheels/
 *.egg-info
 .env
 .pyproject.toml
+job_description_sample.txt
 
 # Virtual environments
 .venv

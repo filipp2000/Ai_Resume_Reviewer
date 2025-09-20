@@ -50,7 +50,18 @@ def extract_text_from_file(uploaded_file) -> str:
     - Returns cleaned text.
     """
     
+    MAX_BYTES = 8 * 1024 * 1024  # 8 MB hard cap for uploads
+    
+    uploaded_file.seek(0) # cache parsing results
     raw = uploaded_file.read()
+    
+    # Size guardrail
+    if len(raw) == 0:
+        raise ValueError("The file appears to be empty.")
+    if len(raw) > MAX_BYTES:
+        raise ValueError("The file is too large (limit ~8MB). Please upload a smaller document.")
+
+    
     file_type = uploaded_file.type
     
     if file_type == "application/pdf":
