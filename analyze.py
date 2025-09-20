@@ -1,4 +1,3 @@
-# Purpose: Build prompt, call OpenAI, and return a structured (JSON) review so the UI can render metrics/lists.
 import json
 from tenacity import retry, stop_after_attempt, wait_exponential
 from openai import OpenAI
@@ -62,7 +61,7 @@ Role to target: {role}
 {RUBRIC_GENERAL}
 
 Resume:
-\"\"\"{resume_text[:20000]}\"\"\""""  # guardrail: limit input length
+\"\"\"{resume_text[:20000]}\"\"\""""  # limit input length
     return [{"role": "system", "content": system},
             {"role": "user", "content": user}]
     
