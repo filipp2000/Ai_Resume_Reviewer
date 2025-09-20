@@ -1,13 +1,3 @@
-# app.py
-# Purpose: Streamlit UI for AI-powered resume review
-# - Robust parsing (PDF/DOCX/TXT) via parser.extract_text_from_file
-# - Role-aware review via analyze_resume(...)
-# - Optional JD-aware ATS review via analyze_with_jd(...)
-# - Clean UI without emojis, proper bullet rendering, and a combined report download
-
-import truststore
-truststore.inject_into_ssl()  # Use OS trust store (fixes corporate SSL intercept)
-
 import os
 import textwrap
 import streamlit as st
